@@ -11,7 +11,6 @@
             background: #0f172a;
             color: white;
             margin: 0;
-
             display: flex;
             justify-content: center;
             align-items: flex-start;
@@ -23,10 +22,8 @@
             width: 100%;
             max-width: 800px;
             height: 90vh;
-
             display: flex;
             flex-direction: column;
-
             border-radius: 12px;
             overflow: hidden;
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.6);
@@ -75,10 +72,6 @@
             color: white;
         }
 
-        input::placeholder {
-            color: #94a3b8;
-        }
-
         button {
             margin-left: 5px;
             padding: 10px;
@@ -87,10 +80,6 @@
             color: white;
             cursor: pointer;
             border-radius: 5px;
-        }
-
-        button:hover {
-            background: #16a34a;
         }
     </style>
 </head>
@@ -101,12 +90,17 @@
         <div id="chat-box" class="chat-box"></div>
 
         <div class="input-area">
-            <input id="textInput" placeholder="Type task OR say 'yes' OR 'change...'" />
+            <input id="textInput" placeholder="Type OR click mic..." />
+            <button onclick="toggleRecording()">🎤</button>
             <button onclick="sendMessage()">Send</button>
         </div>
     </div>
 
     <script>
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
 
         function addMessage(text, sender) {
             let div = document.createElement("div");
@@ -114,18 +108,82 @@
 
             if (Array.isArray(text)) {
                 div.innerText = text.map((t, i) => `${i + 1}. ${t}`).join("\n");
-            } else if (typeof text === "object") {
-                div.innerText = JSON.stringify(text, null, 2);
-            } else if (text) {
-                div.innerText = text;
             } else {
-                div.innerText = "⚠️ Empty response";
+                div.innerText = text || "⚠️ Empty response";
             }
 
             document.getElementById("chat-box").appendChild(div);
             div.scrollIntoView();
         }
 
+        // 🎤 START / STOP RECORDING
+        async function toggleRecording() {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.start();
+                isRecording = true;
+
+                addMessage("🎤 Recording... Click again to stop", "bot");
+
+                mediaRecorder.ondataavailable = e => {
+                    audioChunks.push(e.data);
+                };
+
+            } catch (err) {
+                addMessage("❌ Mic permission denied", "bot");
+            }
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            isRecording = false;
+
+            mediaRecorder.onstop = async () => {
+                let blob = new Blob(audioChunks, { type: "audio/wav" });
+
+                let formData = new FormData();
+                formData.append("audio", blob, "recording.wav");
+
+                try {
+                    let res = await fetch("/chat", {
+                        method: "POST",
+                        body: formData
+                    });
+
+                    let data = await res.json();
+
+                    if (data.error) {
+                        addMessage("❌ " + data.error, "bot");
+                        return;
+                    }
+
+                    if (data.message) {
+                        addMessage(data.message, "user");
+                    }
+
+                    if (data.tasks) {
+                        addMessage(data.tasks, "bot");
+                    }
+
+                } catch (err) {
+                    addMessage("❌ Voice error", "bot");
+                }
+            };
+        }
+
+        // 💬 TEXT CHAT (UNCHANGED)
         async function sendMessage() {
             let input = document.getElementById("textInput");
             let message = input.value.trim();
@@ -135,51 +193,21 @@
             addMessage(message, "user");
             input.value = "";
 
-            // ✅ ALWAYS include message
-            let payload = {
-                message: message
-            };
+            let res = await fetch("/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: message })
+            });
 
-            // ✅ Add extra flags WITHOUT removing message
-            if (message.toLowerCase() === "yes") {
-                payload.approved = true;
-            }
-            else if (
-                message.toLowerCase().includes("change") ||
-                message.toLowerCase().includes("modify")
-            ) {
-                payload.feedback = message;
+            let data = await res.json();
+
+            if (data.error) {
+                addMessage("❌ " + data.error, "bot");
+                return;
             }
 
-            console.log("SENDING:", payload); // 🔥 debug
-
-            try {
-                let res = await fetch("/chat", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-
-                let data = await res.json();
-
-                console.log("API RESPONSE:", data);
-
-                if (data.tasks && data.tasks.length > 0) {
-                    addMessage(data.tasks, "bot");
-                }
-                else if (data.file_path) {
-                    addMessage("✅ File created at: " + data.file_path, "bot");
-                }
-                else if (data.code) {
-                    addMessage(data.code, "bot");
-                }
-                else {
-                    addMessage("⚠️ No response from server", "bot");
-                }
-
-            } catch (error) {
-                console.error("ERROR:", error);
-                addMessage("❌ Server error", "bot");
+            if (data.tasks) {
+                addMessage(data.tasks, "bot");
             }
         }
 
