@@ -37,6 +37,8 @@
             flex: 1;
             overflow-y: auto;
             padding: 15px 20px;
+            display: flex;
+            flex-direction: column;
         }
 
         .message {
@@ -45,7 +47,6 @@
             border-radius: 10px;
             max-width: 70%;
             white-space: pre-line;
-            /* ✅ important for list */
         }
 
         .user {
@@ -55,6 +56,7 @@
 
         .bot {
             background: #1e293b;
+            align-self: flex-start;
         }
 
         .input-area {
@@ -99,39 +101,31 @@
         <div id="chat-box" class="chat-box"></div>
 
         <div class="input-area">
-            <input id="textInput" placeholder="Type your task... (or say 'yes' / 'change location')" />
-
-            <input type="file" id="audioUpload" accept="audio/*" />
-
-            <button onclick="startRecording()">🎤</button>
-            <button onclick="stopRecording()">⏹️</button>
-
+            <input id="textInput" placeholder="Type task OR say 'yes' OR 'change...'" />
             <button onclick="sendMessage()">Send</button>
         </div>
     </div>
 
     <script>
-        let mediaRecorder;
-        let audioChunks = [];
 
-        // ✅ Render messages properly
         function addMessage(text, sender) {
             let div = document.createElement("div");
             div.classList.add("message", sender);
 
-            // ✅ Handle list of tasks
             if (Array.isArray(text)) {
-                let formatted = text.map((t, i) => `${i + 1}. ${t}`).join("\n");
-                div.innerText = formatted;
-            } else {
+                div.innerText = text.map((t, i) => `${i + 1}. ${t}`).join("\n");
+            } else if (typeof text === "object") {
+                div.innerText = JSON.stringify(text, null, 2);
+            } else if (text) {
                 div.innerText = text;
+            } else {
+                div.innerText = "⚠️ Empty response";
             }
 
             document.getElementById("chat-box").appendChild(div);
             div.scrollIntoView();
         }
 
-        // ✅ Main chat logic (NO BUTTONS)
         async function sendMessage() {
             let input = document.getElementById("textInput");
             let message = input.value.trim();
@@ -141,119 +135,54 @@
             addMessage(message, "user");
             input.value = "";
 
-            let payload = {};
+            // ✅ ALWAYS include message
+            let payload = {
+                message: message
+            };
 
-            // 🔥 Conversational control
+            // ✅ Add extra flags WITHOUT removing message
             if (message.toLowerCase() === "yes") {
-                payload = { approved: true };
+                payload.approved = true;
             }
             else if (
                 message.toLowerCase().includes("change") ||
                 message.toLowerCase().includes("modify")
             ) {
-                payload = { feedback: message };
-            }
-            else {
-                payload = { message: message };
+                payload.feedback = message;
             }
 
-            let res = await fetch("/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
+            console.log("SENDING:", payload); // 🔥 debug
 
-            let data = await res.json();
-
-            // ✅ Show tasks
-            if (data.tasks) {
-                addMessage(data.tasks, "bot");
-            }
-
-            // ✅ Show execution result
-            if (data.file_path) {
-                addMessage("✅ File created at: " + data.file_path, "bot");
-            }
-        }
-
-        // 🎤 Start recording
-        async function startRecording() {
-            let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.start();
-
-            audioChunks = [];
-
-            mediaRecorder.ondataavailable = event => {
-                audioChunks.push(event.data);
-            };
-
-            addMessage("🎤 Recording started...", "bot");
-        }
-
-        // ⏹️ Stop recording
-        async function stopRecording() {
-            mediaRecorder.stop();
-
-            mediaRecorder.onstop = async () => {
-                let blob = new Blob(audioChunks, { type: "audio/wav" });
-
-                let formData = new FormData();
-                formData.append("audio", blob, "recording.wav");
-
-                let res = await fetch("/audio", {
+            try {
+                let res = await fetch("/chat", {
                     method: "POST",
-                    body: formData
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
                 });
 
                 let data = await res.json();
 
-                addMessage(data.transcript, "user");
+                console.log("API RESPONSE:", data);
 
-                // reuse same flow
-                let chatRes = await fetch("/chat", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ message: data.transcript })
-                });
-
-                let chatData = await chatRes.json();
-
-                if (chatData.tasks) {
-                    addMessage(chatData.tasks, "bot");
+                if (data.tasks && data.tasks.length > 0) {
+                    addMessage(data.tasks, "bot");
                 }
-            };
+                else if (data.file_path) {
+                    addMessage("✅ File created at: " + data.file_path, "bot");
+                }
+                else if (data.code) {
+                    addMessage(data.code, "bot");
+                }
+                else {
+                    addMessage("⚠️ No response from server", "bot");
+                }
+
+            } catch (error) {
+                console.error("ERROR:", error);
+                addMessage("❌ Server error", "bot");
+            }
         }
 
-        // 📁 Upload audio
-        document.getElementById("audioUpload").addEventListener("change", async function () {
-            let file = this.files[0];
-
-            let formData = new FormData();
-            formData.append("audio", file);
-
-            let res = await fetch("/audio", {
-                method: "POST",
-                body: formData
-            });
-
-            let data = await res.json();
-
-            addMessage(data.transcript, "user");
-
-            let chatRes = await fetch("/chat", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: data.transcript })
-            });
-
-            let chatData = await chatRes.json();
-
-            if (chatData.tasks) {
-                addMessage(chatData.tasks, "bot");
-            }
-        });
     </script>
 
 </body>
